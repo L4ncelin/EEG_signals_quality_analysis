@@ -1,0 +1,12 @@
+dependencies:
+  - python
+  - pip
+  - pip:
+    - jupyter
+    - pandas
+    - scikit-learn
+    - numpy
+    - matplotlib
+    - seaborn
+    - black
+    - scipy
