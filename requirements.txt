@@ -1,0 +1,17 @@
+jupyter
+pandas
+scikit-learn
+numpy
+matplotlib
+seaborn
+black
+scipy
+joblib
+colorcet
+pyEDFlib
+PyWavelets
+antropy
+hurst
+xgboost
+scikeras
+tensorflow

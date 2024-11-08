@@ -1,1 +1,5 @@
 /Data/
+/Env/
+
+*.csv
+*/__pycache__/

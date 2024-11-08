@@ -10,3 +10,9 @@ dependencies:
     - seaborn
     - black
     - scipy
+    - joblib
+    - colorcet
+    - pyEDFlib
+    - pywavelets
+    - antropy
+    - hurst
