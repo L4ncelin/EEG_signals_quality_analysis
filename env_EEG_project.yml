@@ -1,5 +1,7 @@
+name : env_EEG_project_ML
+
 dependencies:
-  - python
+  - python=3.12
   - pip
   - pip:
     - jupyter
@@ -10,3 +12,7 @@ dependencies:
     - seaborn
     - black
     - scipy
+    - mne
+    - multitaper
+    - tqdm
+    - jolib
