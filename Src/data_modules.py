@@ -29,6 +29,22 @@ def load_train_data(set:int=0):
 
     return train_data, train_target
 
+def load_test_data(set:int=0):
+    """Load all testing sets.
+
+    Args:
+        set (int, optional): Testing set in [0,1]. Defaults to 0.
+
+    Returns:
+        dict: _description_
+    """
+    ROOT_PATH = Path("../Data/test/")
+    test_data = [np.load(ROOT_PATH / f"data_{i}.npy") for i in [4,5]]
+
+    test_data = test_data[set]
+
+    return test_data
+
 
 def plot_predictions_and_signal(
     target,
@@ -84,7 +100,7 @@ def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
     y = lfilter(b, a, data)
     return y
 
-def get_multitaper(signal:pd.DataFrame, fs:int=250, duration:int=3600, channel:int=0, start_time:int=0):
+def get_multitaper(signal:pd.DataFrame, fs:int=250, duration:int=3600, channel:int=0, start_time:int=0, window_size:list=[5,1]):
     """Return the multitaper matrix.
 
     Args:
@@ -93,6 +109,7 @@ def get_multitaper(signal:pd.DataFrame, fs:int=250, duration:int=3600, channel:i
         duration (int, optional): Duration we want to see. Defaults to 3600 seconds.
         channel (int, optional): Channel to use. Defaults to 0.
         start_time (int, optional): Starting time. Defaults to 0 seconds.
+        window_size (list, optional): Window of computing analysis of the multitaper algorithm (precision). Defaults to [5, 1] (len, step).
 
     Returns:
         np.ndarray : Multitaper matrix as np.array
@@ -105,12 +122,15 @@ def get_multitaper(signal:pd.DataFrame, fs:int=250, duration:int=3600, channel:i
     data = signal[channel, start_idx_data:end_idx_data]
 
     # Multitaper
-    spect, _, _ = multitaper_spectrogram(data, fs, frequency_range=[0,30], plot_on=False, verbose=False)
-    multitaper_data = 10 * np.log10(spect)
+    try :
+        spect, _, _ = multitaper_spectrogram(data, fs, frequency_range=[0,30], plot_on=False, verbose=False, window_params=window_size)
+        multitaper_data = 10 * np.log10(spect)
+    except ValueError:
+        multitaper_data = np.array([])
 
     return multitaper_data
 
-def get_multitaper_data(fs:int=250, nb_sets:int=4, nb_channels:int=5):
+def get_all_multitapers_data(fs:int=250, nb_sets:int=4, nb_channels:int=5):
     """Return all multitapers matrix.
 
     Args:
@@ -132,7 +152,7 @@ def get_multitaper_data(fs:int=250, nb_sets:int=4, nb_channels:int=5):
     
     return multitaper_data
 
-def process_channel(args):
+def process_channel_all_multitapers(args):
     """Parralel task, getting the multitaper matrix of one set of one channel.
 
     Args:
@@ -145,7 +165,7 @@ def process_channel(args):
     result = get_multitaper(train_data, fs, duration, channel=c)
     return idx, result
 
-def parallel_multitaper(nb_sets:int=4, nb_channels:int=5, fs:int=250):
+def parallel_all_multitapers(nb_sets:int=4, nb_channels:int=5, fs:int=250):
     """Return all multitapers matrix using parralel computation.
 
     Args:
@@ -171,7 +191,7 @@ def parallel_multitaper(nb_sets:int=4, nb_channels:int=5, fs:int=250):
     # Exécution parallèle avec barre de progression
     with ProcessPoolExecutor() as executor:
         # Soumettre toutes les tâches
-        futures = {executor.submit(process_channel, task): task for task in tasks}
+        futures = {executor.submit(process_channel_all_multitapers, task): task for task in tasks}
 
         # Affichage de la barre de progression
         for future in tqdm(as_completed(futures), total=len(tasks), desc="Calcul multitaper"):
@@ -180,6 +200,47 @@ def parallel_multitaper(nb_sets:int=4, nb_channels:int=5, fs:int=250):
 
     return multitaper_data
 
+
+def get_windowed_multitaper_data(fs:int=250, nb_sets:int=4, nb_channels:int=5, windows_size:int=2, type:str="train"):
+    """Return all multitapers matrix with a certain windows restriction.
+
+    Args:
+        fs (int, optional): Sampling rate. Defaults to 250Hz.
+        nb_sets (int, optional): Number of sets. Defaults to 4.
+        nb_channels (int, optional): Number of channels. Defaults to 5.
+        windows_size (int, optional): Size of the windows to capture. Defaults to 2 seconds.
+
+    Returns:
+        list[list[np.ndarray]]: All set and channel multitapers data windowed 
+    """
+    multitaper_data = []
+    x=1
+    for i in range(nb_sets):
+        set_data = []
+
+        if type == "train":
+            train_data, _ = load_train_data(set=i)
+        elif type == "test":
+            train_data = load_test_data(set=i)
+
+        for c in range(nb_channels):
+            channel_data = []
+            print("Iteration {}/{}".format(x, nb_sets*nb_channels))
+            x+=1
+
+            for w in range(0, train_data.shape[1]//fs , windows_size): # We windowed the data to get multitaper of 2 seconds
+                multitaper = get_multitaper(train_data, fs, duration=windows_size, channel=c, start_time=w, window_size=[2, 1])
+
+                if multitaper.size == 0:
+                    print("Last window removed for channel {} in set {}".format(c, i))
+                else:
+                    channel_data += [multitaper]
+            
+            set_data += [channel_data]
+        
+        multitaper_data += [set_data]
+    
+    return multitaper_data
 
 
 def plot_signals_analysis(signal:pd.DataFrame, target_signal:pd.DataFrame, fs:int=250, window_size:int=2, duration:int=3600, channel:int=0, start_time:int=0, set:int=0):
@@ -213,7 +274,9 @@ def plot_signals_analysis(signal:pd.DataFrame, target_signal:pd.DataFrame, fs:in
     t_target = np.arange(len(target_data)) * window_size
 
     # Multitaper
-    spect, stimes, sfreqs = multitaper_spectrogram(data, fs, frequency_range=[0,30], plot_on=False)
+    if duration > 5 :
+        duration = 5 # To manage small windows, else ignore to plot the entire signal
+    spect, stimes, sfreqs = multitaper_spectrogram(data, fs, frequency_range=[0,30], plot_on=False, window_params=[duration, 1])
     multitaper_data = 10 * np.log10(spect)
 
 
@@ -228,7 +291,7 @@ def plot_signals_analysis(signal:pd.DataFrame, target_signal:pd.DataFrame, fs:in
     axs[1].set_xlim(0,t_data[-1])
     axs[1].set_ylabel("Signal amplitude")
 
-    axs[2].plot(t_target, target_data)
+    axs[2].step(t_target, target_data)
     axs[2].set_xlim(0,t_target[-1])
     axs[2].set_xlabel("Time (seconds)")
     axs[2].set_ylabel("Defect classification")
