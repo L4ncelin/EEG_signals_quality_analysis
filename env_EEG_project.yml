@@ -1,18 +1,24 @@
 name : env_EEG_project_ML
 
+channels:
+  - conda-forge
+  - defaults
 dependencies:
-  - python=3.12
+  - python=3.10
+  - ipykernel
+  - pandas
+  - numpy
+  - scikit-learn
+  - matplotlib
+  - scipy
   - pip
   - pip:
     - jupyter
-    - pandas
-    - scikit-learn
-    - numpy
-    - matplotlib
     - seaborn
     - black
-    - scipy
     - mne
-    - multitaper
     - tqdm
     - jolib
+    - xgboost
+    - colorcet
+    - tensorflow

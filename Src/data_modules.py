@@ -109,7 +109,7 @@ def get_multitaper(signal:pd.DataFrame, fs:int=250, duration:int=3600, channel:i
         duration (int, optional): Duration we want to see. Defaults to 3600 seconds.
         channel (int, optional): Channel to use. Defaults to 0.
         start_time (int, optional): Starting time. Defaults to 0 seconds.
-        window_size (list, optional): Window of computing analysis of the multitaper algorithm (precision). Defaults to [5, 1] (len, step).
+        window_size (list, optional): Window of computing analysis of the multitaper algorithm (precision). Defaults to [5, 1] (len (seconds), step(seconds)).
 
     Returns:
         np.ndarray : Multitaper matrix as np.array
@@ -201,14 +201,15 @@ def parallel_all_multitapers(nb_sets:int=4, nb_channels:int=5, fs:int=250):
     return multitaper_data
 
 
-def get_windowed_multitaper_data(fs:int=250, nb_sets:int=4, nb_channels:int=5, windows_size:int=2, type:str="train"):
+def get_windowed_multitaper_data(fs:int=250, nb_sets:int=4, nb_channels:int=5, duration:int=2, type:str="train", window_size:list=[2,1]):
     """Return all multitapers matrix with a certain windows restriction.
 
     Args:
         fs (int, optional): Sampling rate. Defaults to 250Hz.
         nb_sets (int, optional): Number of sets. Defaults to 4.
         nb_channels (int, optional): Number of channels. Defaults to 5.
-        windows_size (int, optional): Size of the windows to capture. Defaults to 2 seconds.
+        duration (int, optional): Duration of the windows to capture. Defaults to 2 seconds.
+        window_size (list, optional): Window of computing analysis of the multitaper algorithm (precision). Defaults to [2, 1] (len(seconds), step(seconds)).
 
     Returns:
         list[list[np.ndarray]]: All set and channel multitapers data windowed 
@@ -228,8 +229,8 @@ def get_windowed_multitaper_data(fs:int=250, nb_sets:int=4, nb_channels:int=5, w
             print("Iteration {}/{}".format(x, nb_sets*nb_channels))
             x+=1
 
-            for w in range(0, train_data.shape[1]//fs , windows_size): # We windowed the data to get multitaper of 2 seconds
-                multitaper = get_multitaper(train_data, fs, duration=windows_size, channel=c, start_time=w, window_size=[2, 1])
+            for w in range(0, train_data.shape[1]//fs , duration): # We windowed the data to get multitaper of 2 seconds
+                multitaper = get_multitaper(train_data, fs, duration=duration, channel=c, start_time=w, window_size=window_size)
 
                 if multitaper.size == 0:
                     print("Last window removed for channel {} in set {}".format(c, i))
@@ -242,8 +243,60 @@ def get_windowed_multitaper_data(fs:int=250, nb_sets:int=4, nb_channels:int=5, w
     
     return multitaper_data
 
+def get_channeled_multitaper_data(fs:int=250, nb_sets:int=4, nb_channels:int=5, duration:int=2, type:str="train", window_size:list=[1,0.5]):
+    """Return all multitapers images (31x3) for each channels and sets.
 
-def plot_signals_analysis(signal:pd.DataFrame, target_signal:pd.DataFrame, fs:int=250, window_size:int=2, duration:int=3600, channel:int=0, start_time:int=0, set:int=0):
+    Args:
+        fs (int, optional): Sampling rate. Defaults to 250Hz.
+        nb_sets (int, optional): Number of sets. Defaults to 4.
+        nb_channels (int, optional): Number of channels. Defaults to 5.
+        duration (int, optional): Duration of the windows to capture. Defaults to 2 seconds.
+        window_size (list, optional): Window of computing analysis of the multitaper algorithm (precision). Defaults to [1, 0.5] (len(seconds), step(seconds)).
+
+    Returns:
+        list[list[5*np.ndarray]]: All set and channel multitapers data windowed 
+    """
+    multitaper_data = []
+    x=1
+    for s in range(nb_sets):
+        set_data = []
+
+        if type == "train":
+            train_data, _ = load_train_data(set=s)
+        elif type == "test":
+            train_data = load_test_data(set=s)
+        
+        print("Set {}/{}".format(s, nb_sets))
+        x+=1
+
+        for w in range(0, train_data.shape[1]//fs , duration): # We windowed the data to get multitaper images of 2 seconds
+            window_data = []
+            
+            bad_window_flag = False
+
+            for c in range(nb_channels):
+            
+                multitaper = get_multitaper(train_data, fs, duration=duration, channel=c, start_time=w, window_size=window_size)
+
+                if multitaper.size == 0 or multitaper.shape[1] != 5:
+                    print("window {} removed in set {}".format(w, s))
+                    x+=2
+                    bad_window_flag = True
+                    break
+                else:
+                    window_data += [multitaper]
+            
+            if bad_window_flag == False:
+                set_data += [window_data]
+            else:
+                bad_window_flag = False
+        
+        multitaper_data += [set_data]
+    
+    return multitaper_data
+
+
+def plot_signals_analysis(signal:pd.DataFrame, target_signal:pd.DataFrame, fs:int=250, window_size:list=[2,1], duration:int=3600, channel:int=0, start_time:int=0, set:int=0, window_target:int=2):
     """Plot Spectrogram signal, aligned with real signal and target signal. We can parameter the duration and the start time.
 
     Args:
@@ -260,10 +313,10 @@ def plot_signals_analysis(signal:pd.DataFrame, target_signal:pd.DataFrame, fs:in
     # ----------------------------------- Data ----------------------------------- #
     # Indexs
     start_idx_data = int(start_time * fs)
-    start_idx_target = int(start_time / window_size)
+    start_idx_target = int(start_time / window_target)
 
     end_idx_data = start_idx_data + int(duration * fs)
-    end_idx_target = start_idx_target + int(duration / window_size)
+    end_idx_target = start_idx_target + int(duration / window_target)
 
     # Signal
     data = signal[channel, start_idx_data:end_idx_data]
@@ -271,12 +324,12 @@ def plot_signals_analysis(signal:pd.DataFrame, target_signal:pd.DataFrame, fs:in
 
     # Target
     target_data = target_signal[channel, start_idx_target:end_idx_target]
-    t_target = np.arange(len(target_data)) * window_size
+    t_target = np.arange(len(target_data)) * window_target
 
     # Multitaper
     if duration > 5 :
         duration = 5 # To manage small windows, else ignore to plot the entire signal
-    spect, stimes, sfreqs = multitaper_spectrogram(data, fs, frequency_range=[0,30], plot_on=False, window_params=[duration, 1])
+    spect, stimes, sfreqs = multitaper_spectrogram(data, fs, frequency_range=[0,30], plot_on=False, window_params=window_size)
     multitaper_data = 10 * np.log10(spect)
 
 
@@ -304,3 +357,51 @@ def plot_signals_analysis(signal:pd.DataFrame, target_signal:pd.DataFrame, fs:in
     plt.show()
 
     return spect, stimes, sfreqs
+
+def format_array_to_target_format(array, record_number, nb_points):
+
+    formatted_target = []
+    for i in range(5):
+        channel_encoding = (i + 1) * 100000
+        record_number_encoding = record_number * 1000000
+        for j in range(nb_points):
+            formatted_target.append(
+                {
+                    "identifier": record_number_encoding + channel_encoding + j,
+                    "target": array[i][j],
+                }
+            )
+    return formatted_target
+
+
+def create_submission_file(test_data_model, model, output_file_name, conversion:bool=False, channels:bool=False):
+    results = []
+
+    # Set 4
+    X_test_4 = test_data_model[:66020]
+    preds = (model.predict(X_test_4) > 0.5)
+    sublists = [preds[i:i + 13204] for i in range(0, len(preds), 13204)]
+
+    formatted_preds = format_array_to_target_format(sublists, 4, 13204)
+    if channels is True:
+        formatted_preds = formatted_preds.flatten().tolist()
+    results.extend(formatted_preds)
+
+    # Set 5
+    X_test_5 = test_data_model[66020:]
+    preds = (model.predict(X_test_5) > 0.5)
+    sublists = [preds[i:i + 9319] for i in range(0, len(preds), 9319)]
+
+    formatted_preds = format_array_to_target_format(sublists, 5, 9319)
+    if channels is True:
+        formatted_preds = formatted_preds.flatten().tolist()
+    results.extend(formatted_preds)
+
+    df = pd.DataFrame(results)
+
+    if conversion is True:
+        df['target'] = df['target'].apply(lambda x: 1 if x[0] == True else (0 if x[0] == False else x[0]))
+    
+    print(df["target"].count(0))
+
+    df.to_csv("../Results/{}.csv".format(output_file_name),index = False)
