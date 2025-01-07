@@ -95,7 +95,7 @@ def plot_predictions_and_signal(
 def butter_bandpass(lowcut, highcut, fs, order=5):
     return butter(order, [lowcut, highcut], fs=fs, btype='band')
 
-def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
+def butter_bandpass_filter(data, lowcut=0.1, highcut=50, fs=250, order=4):
     b, a = butter_bandpass(lowcut, highcut, fs, order=order)
     y = lfilter(b, a, data)
     return y
@@ -405,3 +405,21 @@ def create_submission_file(test_data_model, model, output_file_name, conversion:
     print(df["target"].count(0))
 
     df.to_csv("../Results/{}.csv".format(output_file_name),index = False)
+
+
+def segment_signals(data, window_size):
+    """
+    Segmente les signaux en fenêtres non-chevauchantes.
+    
+    Args:
+        data (numpy.ndarray): Array de dimensions (n_channels, n_samples).
+        window_size (int): Nombre de points par fenêtre.
+    
+    Returns:
+        numpy.ndarray: Array de dimensions (n_windows, n_channels, window_size).
+    """
+    n_channels, n_samples = data.shape
+    n_windows = n_samples // window_size  # Nombre de fenêtres possibles
+    segmented_data = data[:, :n_windows * window_size]  # Tronquer pour correspondre à des fenêtres entières
+    segmented_data = segmented_data.reshape(n_channels, n_windows, window_size)
+    return np.transpose(segmented_data, (1, 0, 2))  # Dimensions (n_windows, n_channels, window_size)
