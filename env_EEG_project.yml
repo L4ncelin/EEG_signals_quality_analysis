@@ -7,10 +7,12 @@ dependencies:
   - python=3.10
   - ipykernel
   - pandas
-  - numpy
+  - numpy<2.0,>=1.20
   - scikit-learn
   - matplotlib
-  - scipy
+  - scipy<1.14.0,>=1.7.0
+  - gensim=4.3.3
+  - contourpy=1.2.0
   - pip
   - pip:
     - jupyter
@@ -23,3 +25,6 @@ dependencies:
     - colorcet
     - tensorflow
     - statsmodels
+    - shap
+    - pyentrp
+    - hurst

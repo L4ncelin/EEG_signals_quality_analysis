@@ -4,7 +4,15 @@ import pandas as pd
 from scipy.signal import butter, lfilter
 import matplotlib.pyplot as plt
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from sklearn.decomposition import NMF
 from tqdm import tqdm
+import concurrent.futures
+import torch
+
+from scipy.stats import skew, kurtosis
+from scipy.signal import welch
+
+from Src.features_functions import *
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -423,3 +431,503 @@ def segment_signals(data, window_size):
     segmented_data = data[:, :n_windows * window_size]  # Tronquer pour correspondre à des fenêtres entières
     segmented_data = segmented_data.reshape(n_channels, n_windows, window_size)
     return np.transpose(segmented_data, (1, 0, 2))  # Dimensions (n_windows, n_channels, window_size)
+
+def create_segments(signal, segment_length=500, channel:int=0):
+    # Initialiser une liste pour stocker les segments
+    segments = []
+
+    signal_filtered = butter_bandpass_filter(signal,0.1,30,250,5)
+
+    # Parcourir le signal par pas de 500
+    for i in range(0, len(signal_filtered), segment_length):
+        # Vérifier si le segment de 500 points peut être extrait
+        if i + segment_length <= len(signal_filtered):
+            segment = signal_filtered[i:i + segment_length]
+            segments.append(segment)
+
+    segments = [arr.tolist() for arr in segments]
+    segments_dict = {"signal_windowed_channel{}".format(channel): segments}
+
+    segments_df = pd.DataFrame(segments_dict)
+    
+    return segments_df
+
+def calculate_segment_speed(window):
+    """
+    Fonction qui découpe une fenêtre de 500 points en 5 segments de 100 points,
+    puis calcule la vitesse moyenne, maximale et minimale pour chaque segment.
+
+    Args:
+    - window (array): Une fenêtre de signal EEG de 500 points.
+
+    Returns:
+    - (avg_speed, max_speed, min_speed): Vitesse moyenne, maximale et minimale pour les 5 segments.
+    """
+    segment_length = 100  # Taille de chaque segment
+    n_segments = 5  # Nombre de segments (pour 500 points, on aura 5 segments de 100 points)
+    
+    avg_speeds = []
+    max_speeds = []
+    min_speeds = []
+    
+    # Découper la fenêtre en 5 segments
+    for i in range(n_segments):
+        start_idx = i * segment_length
+        end_idx = start_idx + segment_length
+        segment = window[start_idx:end_idx]
+        
+        # Calcul de la vitesse sur le segment (différences successives)
+        velocity = np.diff(segment)
+        
+        # Calcul des statistiques de vitesse pour ce segment
+        avg_speeds.append(np.mean(velocity))
+        max_speeds.append(np.max(velocity))
+        min_speeds.append(np.min(velocity))
+    
+    # Calcul des statistiques globales sur les 5 segments
+    avg_speed = np.mean(avg_speeds)
+    max_speed = np.max(max_speeds)
+    min_speed = np.min(min_speeds)
+    
+    return avg_speed, max_speed, min_speed
+
+def extract_features(window, other_windows):
+    window = np.array(window)
+
+    features = {}
+    
+    # Indicateurs temporels
+    features['std'] = np.std(window, axis=0)
+    features["amplitude"] = np.max(window, axis=0) - np.min(window, axis=0)
+    features['skewness'] = skew(window, axis=0)
+    features['kurtosis'] = kurtosis(window, axis=0)
+
+    avg_speed, max_speed, min_speed = calculate_segment_speed(window)
+    features["amplitude_speed"] = max_speed - min_speed
+    
+    # Énergie
+    features['energy'] = np.sum(window**2, axis=0)
+    
+    # Indicateurs fréquentiels
+    freqs, psd = welch(window, fs=250, axis=0, nperseg=window.shape[0])
+    bands = {'delta': (0.5, 4), 'theta': (4, 8), 'alpha': (8, 13), 'beta': (13, 30)}
+    for band, (low, high) in bands.items():
+        idx_band = np.logical_and(freqs >= low, freqs < high)
+        features[f'psd_{band}'] = np.mean(psd[idx_band], axis=0)
+
+    # Ajout des nouvelles caractéristiques
+    features['pfd'] = petrosian_fractal_dimension(window)
+    features['hc'] = hjorth_complexity(window)
+    features['renyi_entropy'] = renyi_entropy(window)
+    features['mcl'] = mean_curve_length(window)
+    features['spen'] = spectral_entropy(window)
+    features['hurst'] = hurst_exponent(window)
+    features['pen'] = permutation_entropy(window)
+    features['me'] = mean_energy(window)
+    features['apen'] = approximate_entropy(window)
+    features['mte'] = mean_teager_energy(window)
+    features['zc'] = zero_crossings(window)
+    features['wv1'] = np.mean(wigner_ville(window, 1))
+    features['wv4'] = np.mean(wigner_ville(window, 4))
+
+    # Calculer les indicateurs pour chaque canal de other_windows
+    corr_list = []
+    cov_list = []
+    dist_list = []
+
+    for other_window in other_windows:
+        corr_list.append(np.corrcoef(window, other_window)[0, 1])
+        cov_list.append(np.cov(window, other_window)[0, 1])
+        dist_list.append(np.linalg.norm(window - other_window))
+
+    # Agréger les indicateurs pour tous les canaux
+    features['corr_with_others'] = np.mean(corr_list)  # Moyenne des corrélations
+    features['cov_with_others'] = np.mean(cov_list)    # Moyenne des covariances
+    features['euclidean_distance_with_others'] = np.mean(dist_list)  # Moyenne des distances euclidiennes
+        
+    return features
+
+# ---------------------- All data without channels infos --------------------- #
+
+# Fonction à paralléliser
+def process_window_1(window):
+    features = extract_features(window)
+    return np.hstack(list(features.values()))
+
+def get_training_input_data():
+    data = pd.DataFrame(columns=["signal_windowed", "target"])
+
+    for s in range(4):
+        print("Computing set n°{}".format(s))
+        train_data, train_target = load_train_data(set=s)
+
+        for c in range(5):
+            segments_df = create_segments(train_data[c])
+
+            segments_df["target"] = train_target[c]
+
+            data = pd.concat([data, segments_df])
+    
+    # Extraire les indicateurs pour chaque fenêtre
+    all_features = []
+    print("{} windows to compute...".format(data.shape[0]))
+    # for window in data["signal_windowed"]:
+    #     features = extract_features(window)
+    #     all_features.append(np.hstack(list(features.values())))
+
+    features = extract_features(data["signal_windowed"].iloc[0])
+    # Appliquer le traitement en parallèle avec concurrent.futures
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        all_features = list(executor.map(process_window_1, data["signal_windowed"]))
+
+    column_names = []
+    for key in features.keys():
+        column_names.extend([key])
+
+    df = pd.DataFrame(all_features)
+
+    df = np.clip(df, -np.finfo(np.float32).max, np.finfo(np.float32).max)
+
+    df.columns = column_names
+
+    # Add NMF
+    nmf_df = compute_nmf(data, n_components=8)
+    df = pd.concat([df, nmf_df], axis=1)
+
+
+    df["target"] = data["target"].tolist()
+
+    y = df["target"]
+    X = df.drop(columns=["target"])
+
+    return X, y, data
+
+def get_testing_input_data():
+    data = pd.DataFrame(columns=["signal_windowed"])
+
+    for s in range(2):
+        print("Computing set n°{}".format(s))
+        test_data = load_test_data(set=s)
+
+        for c in range(5):
+            segments_df = create_segments(test_data[c])
+
+            data = pd.concat([data, segments_df])
+
+    
+    # Extraire les indicateurs pour chaque fenêtre
+    all_features = []
+    print("{} windows to compute...".format(data.shape[0]))
+    # for window in data["signal_windowed"]:
+    #     features = extract_features(window)
+    #     all_features.append(np.hstack(list(features.values())))
+
+    features = extract_features(data["signal_windowed"].iloc[0])
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        all_features = list(executor.map(process_window_1, data["signal_windowed"]))
+
+    column_names = []
+    for key in features.keys():
+        column_names.extend([key])
+
+    df = pd.DataFrame(all_features)
+
+    df = np.clip(df, -np.finfo(np.float32).max, np.finfo(np.float32).max)
+
+    df.columns = column_names
+
+    # Add NMF
+    nmf_df = compute_nmf(data, n_components=8)
+    df = pd.concat([df, nmf_df], axis=1)
+
+    return df
+
+def compute_nmf(data:pd.DataFrame, n_components:int=8):
+    all_windows = np.array(data["signal_windowed"].tolist())
+    all_windows = [[x if x >= 0 else 0 for x in arr] for arr in all_windows]
+
+    # Initialiser un modèle NMF
+    model = NMF(n_components=n_components, init='random', random_state=42)
+
+    # Ajuster le modèle sur les données
+    W = model.fit_transform(all_windows)  # Matrice W (caractéristiques latentes)
+
+    array_df = pd.DataFrame(W, columns=[f"NMF_mode_{i}" for i in range(n_components)])
+
+    return array_df
+
+# --------------------- All features with channels infos --------------------- #
+# Fonction pour traiter une fenêtre
+def process_window(args):
+    window, other_windows = args
+    features = extract_features(window, other_windows)
+    return np.hstack(list(features.values()))
+
+def get_training_input_data_channel():
+    data = pd.DataFrame()
+
+    for c in range(5):
+        print("Computing channel n°{}".format(c))
+
+        data_set = pd.DataFrame()
+        for s in range(4):
+        
+            train_data, train_target = load_train_data(set=s)
+            segments_df = create_segments(train_data[c], channel=c)
+
+            segments_df["target_channel{}".format(c)] = train_target[c]
+
+            data_set = pd.concat([data_set, segments_df])
+        
+        data = pd.concat([data, data_set], axis=1)
+    
+    # Extraire les indicateurs pour chaque fenêtre
+    all_features = []
+    print("{} windows to compute...".format(data.shape[0]))
+    for c in range(5):
+        for i in tqdm(range(len(data["signal_windowed_channel0"])), desc="Features extraction for channel n°{}".format(c)):
+            window = data["signal_windowed_channel{}".format(c)].iloc[i]
+            other_windows = [data["signal_windowed_channel{}".format(j)].iloc[i] for j in range(5) if j != c]
+            features = extract_features(window, other_windows)
+            all_features.append(np.hstack(list(features.values())))
+            
+
+    column_names = []
+    for key in features.keys():
+        column_names.extend([key])
+
+    df = pd.DataFrame(all_features)
+
+    df = np.clip(df, -np.finfo(np.float32).max, np.finfo(np.float32).max)
+
+    df.columns = column_names
+
+    # Add NMF
+    nmf_df = compute_nmf(data, n_components=8)
+    df = pd.concat([df, nmf_df], axis=1)
+
+
+    df["target"] = pd.concat([data["target_channel{}".format(c)] for c in range(5)], axis=0).tolist()
+
+    y = df["target"]
+    X = df.drop(columns=["target"])
+
+    return X, y, data
+
+# Fonction principale avec parallélisation
+def get_training_input_data_channel_parallel():
+    data = pd.DataFrame()
+
+    # Charger les données pour chaque canal
+    for c in range(5):
+        print("Computing channel n°{}".format(c))
+
+        data_set = pd.DataFrame()
+        for s in range(4):
+            train_data, train_target = load_train_data(set=s)
+            segments_df = create_segments(train_data[c], channel=c)
+            segments_df["target_channel{}".format(c)] = train_target[c]
+            data_set = pd.concat([data_set, segments_df])
+
+        data = pd.concat([data, data_set], axis=1)
+
+    # Extraction des indicateurs parallélisée
+    all_features = []
+    print("{} windows to compute...".format(data.shape[0]*5))
+
+    # Créer les arguments pour chaque fenêtre
+    tasks = []
+    for c in range(5):
+        for i in range(len(data["signal_windowed_channel0"])):
+            window = data["signal_windowed_channel{}".format(c)].iloc[i]
+            other_windows = [data["signal_windowed_channel{}".format(j)].iloc[i] for j in range(5) if j != c]
+            tasks.append((window, other_windows))  # Préparer les arguments pour chaque tâche
+
+    # Utiliser ProcessPoolExecutor pour la parallélisation
+    with ProcessPoolExecutor() as executor:
+        results = list(
+            tqdm(
+                executor.map(process_window, tasks),
+                total=len(tasks),
+                desc="Parallel feature extraction"
+            )
+        )
+
+    # Convertir les résultats en DataFrame
+    all_features = np.array(results)
+    column_names = []
+    for key in extract_features(np.random.random(500), [np.random.random(500) for _ in range(4)]).keys():
+        column_names.append(key)
+
+    df = pd.DataFrame(all_features, columns=column_names)
+
+    # Limiter les valeurs extrêmes
+    df = np.clip(df, -np.finfo(np.float32).max, np.finfo(np.float32).max)
+
+    # Ajouter les données NMF
+    signal_data = pd.DataFrame(pd.concat([data["signal_windowed_channel{}".format(c)] for c in range(5)], axis=0), columns=["signal_windowed"])
+    nmf_df = compute_nmf(signal_data, n_components=8)
+    df = pd.concat([df, nmf_df], axis=1)
+
+    # Ajouter la cible
+    df["target"] = pd.concat([data["target_channel{}".format(c)] for c in range(5)], axis=0).tolist()
+
+    y = df["target"]
+    X = df.drop(columns=["target"])
+
+    return X, y, data
+
+def get_testing_input_data_channel_parallel():
+    data = pd.DataFrame()
+
+    # Charger les données pour chaque canal
+    for c in range(5):
+        print(f"Processing channel n°{c}")
+        
+        data_set = pd.DataFrame()
+        for s in range(2):  # Parcours des deux ensembles de test
+            test_data = load_test_data(set=s)
+            segments_df = create_segments(test_data[c], channel=c)
+            data_set = pd.concat([data_set, segments_df])
+
+        data = pd.concat([data, data_set], axis=1)
+
+    # Extraction des indicateurs parallélisée
+    all_features = []
+    print(f"{data.shape[0] * 5} windows to compute...")
+
+    # Créer les arguments pour chaque fenêtre
+    tasks = []
+    for c in range(5):
+        for i in range(len(data[f"signal_windowed_channel{c}"])):
+            window = data[f"signal_windowed_channel{c}"].iloc[i]
+            other_windows = [
+                data[f"signal_windowed_channel{j}"].iloc[i] 
+                for j in range(5) if j != c
+            ]
+            tasks.append((window, other_windows))  # Préparer les arguments pour chaque tâche
+
+    # Utiliser ProcessPoolExecutor pour la parallélisation
+    with ProcessPoolExecutor() as executor:
+        results = list(
+            tqdm(
+                executor.map(process_window, tasks),
+                total=len(tasks),
+                desc="Parallel feature extraction"
+            )
+        )
+
+    # Convertir les résultats en DataFrame
+    all_features = np.array(results)
+    column_names = []
+    for key in extract_features(np.random.random(500), [np.random.random(500) for _ in range(4)]).keys():
+        column_names.append(key)
+
+    df = pd.DataFrame(all_features, columns=column_names)
+
+    # Limiter les valeurs extrêmes
+    df = np.clip(df, -np.finfo(np.float32).max, np.finfo(np.float32).max)
+
+    # Ajouter les données NMF
+    signal_data = pd.DataFrame(pd.concat([data[f"signal_windowed_channel{c}"] for c in range(5)], axis=0), columns=["signal_windowed"])
+    nmf_df = compute_nmf(signal_data, n_components=8)
+    df = pd.concat([df, nmf_df], axis=1)
+
+    return df
+
+# ------------------------------------ GPU ----------------------------------- #
+
+# Convertissez les calculs en PyTorch
+def extract_features_gpu(window):
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("GPU non disponible. Veuillez vérifier votre installation CUDA.")
+    
+    # Déplacer les données vers le GPU
+    window = torch.tensor(window, dtype=torch.float32, device='cuda')
+
+    features = {}
+    
+    # Indicateurs temporels
+    features['std'] = torch.std(window, dim=0).cpu().numpy()
+    features["amplitude"] = (torch.max(window, dim=0).values - torch.min(window, dim=0).values).cpu().numpy()
+    features['skewness'] = skew(window.cpu().numpy(), axis=0)
+    features['kurtosis'] = kurtosis(window.cpu().numpy(), axis=0)
+
+    # Énergie
+    features['energy'] = torch.sum(window**2, dim=0).cpu().numpy()
+
+    # Indicateurs fréquentiels
+    window_np = window.cpu().numpy()  # Welch nécessite NumPy
+    freqs, psd = welch(window_np, fs=250, axis=0, nperseg=window_np.shape[0])
+    bands = {'delta': (0.5, 4), 'theta': (4, 8), 'alpha': (8, 13), 'beta': (13, 30)}
+    for band, (low, high) in bands.items():
+        idx_band = (freqs >= low) & (freqs < high)
+        features[f'psd_{band}'] = psd[idx_band].mean(axis=0)
+
+    # Ajout des nouvelles caractéristiques
+    features['pfd'] = petrosian_fractal_dimension(window.cpu().numpy())
+    features['hc'] = hjorth_complexity(window.cpu().numpy())
+    features['renyi_entropy'] = renyi_entropy(window.cpu().numpy())
+    features['mcl'] = mean_curve_length(window.cpu().numpy())
+    features['spen'] = spectral_entropy(window.cpu().numpy())
+    features['hurst'] = hurst_exponent(window.cpu().numpy())
+    features['pen'] = permutation_entropy(window.cpu().numpy())
+    features['me'] = mean_energy(window.cpu().numpy())
+    features['apen'] = approximate_entropy(window.cpu().numpy())
+    features['mte'] = mean_teager_energy(window.cpu().numpy())
+    features['zc'] = zero_crossings(window.cpu().numpy())
+    features['wv1'] = torch.mean(torch.tensor(wigner_ville(window.cpu().numpy(), 1))).item()
+    features['wv2'] = torch.mean(torch.tensor(wigner_ville(window.cpu().numpy(), 2))).item()
+    features['wv3'] = torch.mean(torch.tensor(wigner_ville(window.cpu().numpy(), 3))).item()
+    features['wv4'] = torch.mean(torch.tensor(wigner_ville(window.cpu().numpy(), 4))).item()
+    features['ha'] = hjorth_activity(window.cpu().numpy())
+    features['hm'] = hjorth_mobility(window.cpu().numpy())
+    
+    return features
+
+
+# Fonction parallèle modifiée pour GPU
+def process_window_gpu(window):
+    features = extract_features_gpu(window)
+    return np.hstack(list(features.values()))
+
+
+# Modifiez la fonction principale pour intégrer le GPU
+def get_training_input_data_gpu():
+    data = pd.DataFrame(columns=["signal_windowed", "target"])
+
+    for s in range(4):
+        print("Computing set n°{}".format(s))
+        train_data, train_target = load_train_data(set=s)
+
+        for c in range(5):
+            segments_df = create_segments(train_data[c])
+            segments_df["target"] = train_target[c]
+            data = pd.concat([data, segments_df])
+
+    # Extraire les indicateurs pour chaque fenêtre
+    all_features = []
+    print("{} windows to compute...".format(data.shape[0]))
+
+    # Utiliser concurrent.futures avec GPU
+    features = extract_features_gpu(data["signal_windowed"].iloc[0])
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        all_features = list(executor.map(process_window_gpu, data["signal_windowed"]))
+
+    column_names = []
+    for key in features.keys():
+        column_names.extend([key])
+
+    df = pd.DataFrame(all_features, columns=column_names)
+
+    # Ajouter NMF
+    nmf_df = compute_nmf(data, n_components=4)
+    df = pd.concat([df, nmf_df], axis=1)
+
+    df["target"] = data["target"].tolist()
+
+    y = df["target"]
+    X = df.drop(columns=["target"])
+
+    return X, y, data
