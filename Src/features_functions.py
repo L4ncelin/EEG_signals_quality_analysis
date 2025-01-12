@@ -3,6 +3,7 @@ from hurst import compute_Hc
 from pyentrp import entropy as ent
 from scipy.signal import spectrogram
 from scipy.signal import welch
+import pywt
 
 def petrosian_fractal_dimension(x):
     N = len(x)
@@ -51,8 +52,20 @@ def wigner_ville(window, order=1):
     _, _, Zxx = spectrogram(window, fs=250)
     return np.abs(Zxx) ** order  # Par exemple, WV-1, WV-2, etc.
 
-def hjorth_activity(window):
-    return np.var(window)
+def hjorth_activity(x):
+    # Calculer la variance du signal
+    variance_x = np.var(x)
+
+    # Calculer la dérivée du signal
+    dx = np.diff(x)
+
+    # Calculer la variance de la dérivée
+    variance_dx = np.var(dx)
+
+    # La Hjorth Activity est la variance de la dérivée divisée par la variance du signal
+    activity = variance_dx / variance_x
+    
+    return activity
 
 def hjorth_mobility(window):
     d1 = np.diff(window)
@@ -79,4 +92,43 @@ def approximate_entropy(U, m=2, r=0.2):
         return np.sum(np.log(C)) / (N - m + 1.0)
     
     return abs(_phi(m) - _phi(m + 1))
+
+# Fonction pour extraire les coefficients d'ondelettes et les caractéristiques associées
+def extract_wavelet_features(window, wavelet='db4', level=5):
+    # Calcul de la transformée en ondelettes discrète (DWT)
+    coeffs = pywt.wavedec(window, wavelet, level=level)
+    
+    features = {}
+    
+    # Boucle sur chaque sous-bande de détail D3 à D5 et approximation A5
+    for i in range(3, 6):  # D3 à D5 (D3 = D3-1, D4 = D4-1, D5 = D5-1)
+        D = coeffs[i]
+        
+        # D3-1, D4-1, D5-1 : Moyenne absolue des coefficients
+        features[f'D{i}-1'] = np.mean(np.abs(D))
+        
+        # D3-2, D4-2, D5-2 : Moyenne de la puissance des coefficients
+        features[f'D{i}-2'] = np.mean(D**2)
+        
+        # D3-3, D4-3, D5-3 : Écart-type des coefficients
+        features[f'D{i}-3'] = np.std(D)
+        
+        # D3-4, D4-4, D5-4 : Rapport des moyennes absolues des sous-bandes adjacentes
+        if i < 5:
+            D_next = coeffs[i+1]
+            features[f'D{i}-4'] = np.mean(np.abs(D)) / np.mean(np.abs(D_next))
+    
+    # A5 : Approximation finale
+    A5 = coeffs[0]
+    
+    # A5-1 : Moyenne absolue des coefficients d'approximation
+    features['A5-1'] = np.mean(np.abs(A5))
+    
+    # A5-2 : Moyenne de la puissance des coefficients d'approximation
+    features['A5-2'] = np.mean(A5**2)
+    
+    # A5-3 : Écart-type des coefficients d'approximation
+    features['A5-3'] = np.std(A5)
+    
+    return features
 

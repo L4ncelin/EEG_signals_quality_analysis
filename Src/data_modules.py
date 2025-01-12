@@ -5,6 +5,7 @@ from scipy.signal import butter, lfilter
 import matplotlib.pyplot as plt
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from sklearn.decomposition import NMF
+from sklearn.model_selection import learning_curve
 from tqdm import tqdm
 import concurrent.futures
 import torch
@@ -498,12 +499,20 @@ def extract_features(window, other_windows):
     
     # Indicateurs temporels
     features['std'] = np.std(window, axis=0)
+    features['var'] = np.var(window, axis=0)
     features["amplitude"] = np.max(window, axis=0) - np.min(window, axis=0)
     features['skewness'] = skew(window, axis=0)
     features['kurtosis'] = kurtosis(window, axis=0)
+    features["min"] = np.min(window, axis=0)
+    features["max"] = np.max(window, axis=0)
+    features["mean"] = np.mean(window, axis=0)
+    features["median"] = np.median(window, axis=0)
 
     avg_speed, max_speed, min_speed = calculate_segment_speed(window)
     features["amplitude_speed"] = max_speed - min_speed
+    features["avg_speed"] = avg_speed
+    features["max_speed"] = max_speed
+    features["min_speed"] = min_speed
     
     # Énergie
     features['energy'] = np.sum(window**2, axis=0)
@@ -515,9 +524,15 @@ def extract_features(window, other_windows):
         idx_band = np.logical_and(freqs >= low, freqs < high)
         features[f'psd_{band}'] = np.mean(psd[idx_band], axis=0)
 
+    # Ajout des caractéristiques des ondelettes
+    wavelet_features = extract_wavelet_features(window)
+    features.update(wavelet_features)
+
     # Ajout des nouvelles caractéristiques
     features['pfd'] = petrosian_fractal_dimension(window)
     features['hc'] = hjorth_complexity(window)
+    features['hm'] = hjorth_mobility(window)
+    features['ha'] = hjorth_activity(window)
     features['renyi_entropy'] = renyi_entropy(window)
     features['mcl'] = mean_curve_length(window)
     features['spen'] = spectral_entropy(window)
@@ -527,7 +542,10 @@ def extract_features(window, other_windows):
     features['apen'] = approximate_entropy(window)
     features['mte'] = mean_teager_energy(window)
     features['zc'] = zero_crossings(window)
+
     features['wv1'] = np.mean(wigner_ville(window, 1))
+    features['wv2'] = np.mean(wigner_ville(window, 2))
+    features['wv3'] = np.mean(wigner_ville(window, 3))
     features['wv4'] = np.mean(wigner_ville(window, 4))
 
     # Calculer les indicateurs pour chaque canal de other_windows
@@ -546,6 +564,77 @@ def extract_features(window, other_windows):
     features['euclidean_distance_with_others'] = np.mean(dist_list)  # Moyenne des distances euclidiennes
         
     return features
+
+def extract_features2(window, other_windows):
+    window = np.array(window)
+
+    features = {}
+
+    # Time Domain Features
+    features['std'] = np.std(window, axis=0)
+    features['var'] = np.var(window, axis=0)
+    features["amplitude"] = np.max(window, axis=0) - np.min(window, axis=0)
+    features['skewness'] = skew(window, axis=0)
+    features['kurtosis'] = kurtosis(window, axis=0)
+    features["min"] = np.min(window, axis=0)
+    features["max"] = np.max(window, axis=0)
+    features["mean"] = np.mean(window, axis=0)
+    features["median"] = np.median(window, axis=0)
+
+    avg_speed, max_speed, min_speed = calculate_segment_speed(window)
+    features["amplitude_speed"] = max_speed - min_speed
+    features["avg_speed"] = avg_speed
+    features["max_speed"] = max_speed
+    features["min_speed"] = min_speed
+    
+    features['energy'] = np.sum(window**2, axis=0)
+    
+    # Frequency Based Features
+    freqs, psd = welch(window, fs=250, axis=0, nperseg=window.shape[0])
+    bands = {'delta': (0.5, 4), 'theta': (4, 8), 'alpha': (8, 13), 'beta': (13, 30)}
+    for band, (low, high) in bands.items():
+        idx_band = np.logical_and(freqs >= low, freqs < high)
+        features[f'psd_{band}'] = np.mean(psd[idx_band], axis=0)
+
+    # Wigner-Ville Distribution Features
+    features['wv1'] = np.mean(wigner_ville(window, 1))
+    features['wv2'] = np.mean(wigner_ville(window, 2))
+    features['wv3'] = np.mean(wigner_ville(window, 3))
+    features['wv4'] = np.mean(wigner_ville(window, 4))
+
+    # Nonlinear Based Features
+    features['pfd'] = petrosian_fractal_dimension(window)
+    features['hc'] = hjorth_complexity(window)
+    features['hm'] = hjorth_mobility(window)
+    features['ha'] = hjorth_activity(window)
+    features['mcl'] = mean_curve_length(window)
+    features['zc'] = zero_crossings(window)
+    features['me'] = mean_energy(window)
+    
+    # Entropy-Based Features
+    features['renyi_entropy'] = renyi_entropy(window)
+    features['spen'] = spectral_entropy(window)
+    features['pen'] = permutation_entropy(window)
+    features['apen'] = approximate_entropy(window)
+    features['mte'] = mean_teager_energy(window)
+    features['hurst'] = hurst_exponent(window)
+
+    # Calculer les indicateurs pour chaque canal de other_windows
+    corr_list = []
+    cov_list = []
+    dist_list = []
+
+    for other_window in other_windows:
+        corr_list.append(np.corrcoef(window, other_window)[0, 1])
+        cov_list.append(np.cov(window, other_window)[0, 1])
+        dist_list.append(np.linalg.norm(window - other_window))
+
+    features['corr_with_others'] = np.mean(corr_list)
+    features['cov_with_others'] = np.mean(cov_list)
+    features['euclidean_distance_with_others'] = np.mean(dist_list)
+        
+    return features
+
 
 # ---------------------- All data without channels infos --------------------- #
 
@@ -834,6 +923,21 @@ def get_testing_input_data_channel_parallel():
     df = pd.concat([df, nmf_df], axis=1)
 
     return df
+
+def plot_learning_curve(estimator, X, y):
+    train_sizes, train_scores, val_scores = learning_curve(
+        estimator, X, y, cv=3, scoring='accuracy', train_sizes=np.linspace(0.1, 1.0, 5), n_jobs=-1
+    )
+    train_mean = train_scores.mean(axis=1)
+    val_mean = val_scores.mean(axis=1)
+
+    plt.plot(train_sizes, train_mean, label="Training score")
+    plt.plot(train_sizes, val_mean, label="Validation score")
+    plt.xlabel("Training size")
+    plt.ylabel("Accuracy")
+    plt.legend()
+    plt.title("Learning Curve")
+    plt.show()
 
 # ------------------------------------ GPU ----------------------------------- #
 

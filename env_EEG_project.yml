@@ -13,6 +13,8 @@ dependencies:
   - scipy<1.14.0,>=1.7.0
   - gensim=4.3.3
   - contourpy=1.2.0
+  - pytorch
+  - torchvision
   - pip
   - pip:
     - jupyter
@@ -28,3 +30,4 @@ dependencies:
     - shap
     - pyentrp
     - hurst
+    - pywavelets
