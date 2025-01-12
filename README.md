@@ -1,13 +1,14 @@
-<h1 style="text-align: center;">EEG Signal Quality Analysis by Beacon Biosignals</h1>
+<h1 align="center">EEG Signal Quality Analysis by Beacon Biosignals</h1>
 
-<div style="display: flex; justify-content: center; align-items: center; margin-bottom: 50px;">
-    <img src="Images/Logo_CentraleSupelec.png" alt="Image 1" style="width: 30%; margin-right: 10px;" />
-    <img src="Images/Beacon_Biosignals_Logo.jpg" alt="Image 2" style="width: 30%;" />
-</div>
+<p align="center">
+  <img src="Images/Logo_CentraleSupelec.png" width="30%" />
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="Images/Beacon_Biosignals_Logo.jpg" width="30%" />
+</p>
 
-<div style="text-align: center;">
+<div align="center">
     <a href="#introduction">Introduction</a> •
-    <a href="#data-treatment">Data Treament</a> •
+    <a href="#data-treatment">Data Treatment</a> •
     <a href="#feature-extraction">Feature Extraction</a> •
     <a href="#feature-selection">Feature Selection</a> •
     <a href="#data-augmentation">Data Augmentation</a> •
@@ -15,7 +16,6 @@
     <a href="#results">Results</a> •
     <a href="#conclusion">Conclusion</a>
 </div>
-
 
 ## Introduction  
 This project aims to classify EEG signals into two categories:  
