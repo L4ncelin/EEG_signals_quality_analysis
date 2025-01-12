@@ -1,10 +1,9 @@
 <h1 style="text-align: center;">EEG Signal Quality Analysis by Beacon Biosignals</h1>
 
-<div style="display: flex; justify-content: space-evenly; align-items: center; margin-bottom: 50px;">
-    <img src="Images/Logo_CentraleSupelec.png" alt="Image 1" style="width: 30%" />
-    <img src="Images/Beacon_Biosignals_Logo.jpg" alt="Image 2" style="width: 30%"/>
+<div style="display: flex; justify-content: center; align-items: center; margin-bottom: 50px;">
+    <img src="Images/Logo_CentraleSupelec.png" alt="Image 1" style="width: 30%; margin-right: 10px;" />
+    <img src="Images/Beacon_Biosignals_Logo.jpg" alt="Image 2" style="width: 30%;" />
 </div>
-
 
 <div style="text-align: center;">
     <a href="#introduction">Introduction</a> •
